@@ -44,7 +44,7 @@ public class Parser {
             help();
         }
 
-        if (!configParser.populate(args[Constants.CONFIG_VALUE])) {
+        if (!configParser.populate(args[Constants.CONFIG_VALUE], idParser.getId())) {
             help();
         }
     }
@@ -66,8 +66,11 @@ public class Parser {
         return outputParser.getPath();
     }
 
-    public String config() {
+    public String configPath() {
         return configParser.getPath();
     }
 
+    public Order order() {
+        return configParser.getOrder();
+    }
 }
