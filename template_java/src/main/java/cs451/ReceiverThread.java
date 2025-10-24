@@ -20,11 +20,11 @@ public class ReceiverThread extends Thread {
         
         while (true) {
             try {
-            byte[] buffer = new byte[65535];
-            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                byte[] buffer = new byte[65535];
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
 
-            socket.receive(packet);
-            packetQueue.add(packet);
+                socket.receive(packet);
+                packetQueue.add(packet);
 
             } catch (Exception e) {
                 System.err.println("Error receiving packet: " + e.getMessage());

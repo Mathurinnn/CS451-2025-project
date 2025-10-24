@@ -3,8 +3,6 @@ package cs451;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
-import java.nio.Buffer;
-import java.util.List;
 
 enum NodeType {
     SENDER,
@@ -16,10 +14,17 @@ class Order {
     public NodeType nodeType;
     public int maxMessages;
     public boolean isCompleted = false;
+    public int destId;
 
     public Order(NodeType nodeType, int maxMessages) {
         this.nodeType = nodeType;
         this.maxMessages = maxMessages;
+        this.destId = -1;
+    }
+    public Order(NodeType nodeType, int maxMessages, int destId) {
+        this.nodeType = nodeType;
+        this.maxMessages = maxMessages;
+        this.destId = destId;
     }
 
 }
@@ -42,8 +47,8 @@ public class ConfigParser {
                     System.err.println("Invalid config format");
                     return false;
                 }
-                if (args[1] != String.valueOf(myId)) {
-                    this.order = new Order(NodeType.SENDER, Integer.parseInt(args[0]));
+                if (!args[1].equals(String.valueOf(myId))) {
+                    this.order = new Order(NodeType.SENDER, Integer.parseInt(args[0]), Integer.parseInt(args[1]));
                 }
                 else {
                     this.order = new Order(NodeType.RECEIVER, 0);
