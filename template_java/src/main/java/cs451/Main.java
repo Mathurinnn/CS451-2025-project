@@ -10,7 +10,6 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.LinkedBlockingQueue;
 
 
@@ -18,7 +17,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class Main {
 
 
-    private static void handleSignal(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingDeque<String> logQueue) {
+    private static void handleSignal(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingQueue<String> logQueue) {
         //immediately stop network packet processing
         System.out.println("Immediately stopping network packet processing.");
 
@@ -46,7 +45,7 @@ public class Main {
         }
     }
 
-    private static void initSignalHandlers(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingDeque<String> logQueue) {
+    private static void initSignalHandlers(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingQueue<String> logQueue) {
         Runtime.getRuntime().addShutdownHook(new Thread() {
             @Override
             public void run() {
@@ -56,53 +55,19 @@ public class Main {
     }
 
     public static void main(String[] args) throws InterruptedException {
-        System.out.println("=== Main.java START ===");
-        System.out.println("Arguments received: " + args.length);
-        for (int i = 0; i < args.length; i++) {
-            System.out.println("  Arg[" + i + "]: " + args[i]);
-        }
-        System.out.println("======================\n");
-        
+      
         Parser parser = new Parser(args);
         parser.parse();
 
         String srcIp = parser.hosts().get(parser.myId() - 1).getIp();
         int srcPort = parser.hosts().get(parser.myId() - 1).getPort();
 
-        
-
-        // example
-        long pid = ProcessHandle.current().pid();
-        System.out.println("My PID: " + pid + "\n");
-        System.out.println("From a new terminal type `kill -SIGINT " + pid + "` or `kill -SIGTERM " + pid + "` to stop processing packets\n");
-
-        System.out.println("My ID: " + parser.myId() + "\n");
-        System.out.println("List of resolved hosts is:");
-        System.out.println("==========================");
-        for (Host host: parser.hosts()) {
-            System.out.println(host.getId());
-            System.out.println("Human-readable IP: " + host.getIp());
-            System.out.println("Human-readable Port: " + host.getPort());
-            System.out.println();
-        }
-        System.out.println();
-
-        System.out.println("Path to output:");
-        System.out.println("===============");
-        System.out.println(parser.output() + "\n");
-
-        System.out.println("Path to config:");
-        System.out.println("===============");
-        System.out.println(parser.configPath() + "\n");
-
-        System.out.println("Doing some initialization\n");
-
         Order order = parser.order();
 
         try {  
             DatagramSocket socket = new DatagramSocket(srcPort);
 
-            LinkedBlockingDeque<String> logQueue = new LinkedBlockingDeque<>(200);
+            LinkedBlockingQueue<String> logQueue = new LinkedBlockingQueue<>(200);
 
             FileWriter writer = new FileWriter(parser.output());
         
@@ -110,8 +75,8 @@ public class Main {
 
 
             if (order.nodeType == NodeType.SENDER) {
-                
-                LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>();
+
+                LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>(100);
                 HashMap<String, Boolean> ackedPackets = new HashMap<>();
                     
                 ReceiverThread receiverThread = new ReceiverThread(socket, packetQueue);
@@ -177,28 +142,28 @@ public class Main {
                             continue;
                         }
 
+                        int packetIdCounter = 0;
                 
                         for (List<Message> batch : batches) {
                         
+                            packetIdCounter += 1;
 
-                            if (ackedPackets.containsKey(String.valueOf(host.getIp()) + ":" + String.valueOf(host.getPort()) + ":" + String.valueOf(batch.get(0).payload)) &&
-                                ackedPackets.get(String.valueOf(host.getIp()) + ":" + String.valueOf(host.getPort()) + ":" + String.valueOf(batch.get(0).payload)) == true) {
+                            if (ackedPackets.containsKey(String.valueOf(host.getIp()) + ":" + String.valueOf(host.getPort()) + ":" + String.valueOf(packetIdCounter)) &&
+                                ackedPackets.get(String.valueOf(host.getIp()) + ":" + String.valueOf(host.getPort()) + ":" + String.valueOf(packetIdCounter)) == true) {
                                 continue;
                             } 
-
-                            System.out.println("Sending");
 
                             Packet packet = new Packet(
                                 srcIp,
                                 srcPort,
                                 host.getIp(),
                                 host.getPort(),
-                                Integer.parseInt(batch.get(0).payload),
+                                packetIdCounter,
                                 batch
                             );
 
 
-                            ackedPackets.put(String.valueOf(packet.destIp) + ":" + String.valueOf(packet.destPort) + ":" + String.valueOf(packet.packetId), false);
+                            ackedPackets.put(String.valueOf(packet.destIp) + ":" + String.valueOf(packet.destPort) + ":" + String.valueOf(packetIdCounter), false);
 
                             byte[] data = packet.toString().getBytes();
 
@@ -209,12 +174,9 @@ public class Main {
                                 host.getPort()
                             );
 
-                            System.out.println(packet.toString());
                             socket.send(datagramPacket);
-
-                            
-                            
                         }
+
                     }
                     while (!packetQueue.isEmpty()) {
                         DatagramPacket receivedPacket = packetQueue.take();
@@ -235,7 +197,7 @@ public class Main {
 
             else if (order.nodeType == NodeType.RECEIVER) {
 
-                LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>();
+                LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>(100);
                 Set<String> deliveredMessages = new HashSet<>();
                 ReceiverThread receiverThread = new ReceiverThread(socket, packetQueue);
                 receiverThread.start();
@@ -246,7 +208,6 @@ public class Main {
                         new String(udpPacket.getData(), 0, udpPacket.getLength())
                     );
 
-                    System.out.println(packet.toString());
 
                     List<Message> messages = new ArrayList<>();
                     for (Message msg : packet.messages) {

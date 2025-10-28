@@ -2,15 +2,15 @@ package cs451;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
-import java.util.Queue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 public class ReceiverThread extends Thread {
     
     private final DatagramSocket socket;
-    private final Queue<DatagramPacket> packetQueue;
+    private final LinkedBlockingQueue<DatagramPacket> packetQueue;
 
 
-    public ReceiverThread(DatagramSocket socket, Queue<DatagramPacket> packetQueue) {
+    public ReceiverThread(DatagramSocket socket, LinkedBlockingQueue<DatagramPacket> packetQueue) {
         this.socket = socket;
         this.packetQueue = packetQueue;
     }
@@ -24,7 +24,7 @@ public class ReceiverThread extends Thread {
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
 
                 socket.receive(packet);
-                packetQueue.add(packet);
+                packetQueue.put(packet);
 
             } catch (Exception e) {
                 System.err.println("Error receiving packet: " + e.getMessage());
