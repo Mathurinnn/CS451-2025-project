@@ -20,39 +20,29 @@ public class LoggingThread extends Thread {
     public void run() {
         try {
             while (!Thread.currentThread().isInterrupted()) {
-                String logEntry = logQueue.take();
-                buffer.add(logEntry);
-                logQueue.drainTo(buffer); // Batch any additional queued entries
-                processLogs();
-                buffer.clear();
+                if (logQueue.remainingCapacity() == 0) 
+                {
+                    String logEntry = logQueue.take();
+                    buffer.add(logEntry);
+                    logQueue.drainTo(buffer);
+                    processLogs();
+                    buffer.clear();
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
             System.err.println("Error in LoggingThread: " + e.getMessage());
-        } finally {
-            flushRemaining();
         }
     }
 
     private void processLogs() throws IOException {
+        StringBuilder sb = new StringBuilder();
         for (String logEntry : buffer) {
-            writer.write(logEntry);
-            writer.write('\n');
+            sb.append(logEntry).append('\n');
         }
+        writer.write(sb.toString());
         writer.flush();
-    }
-
-    private void flushRemaining() {
-        try {
-            logQueue.drainTo(buffer);
-            if (!buffer.isEmpty()) {
-                processLogs();
-                buffer.clear();
-            }
-        } catch (Exception e) {
-            System.err.println("Error flushing remaining logs: " + e.getMessage());
-        }
     }
 
 }
