@@ -17,4 +17,6 @@ public class Constants {
 
     // indexes for config
     public static final int CONFIG_VALUE = 6;
+
+    public static final int QUEUE_CAPACITY = 200;
 }

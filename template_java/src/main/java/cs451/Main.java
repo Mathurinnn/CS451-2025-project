@@ -17,13 +17,16 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class Main {
 
 
-    private static void handleSignal(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingQueue<String> logQueue) {
+    private static void handleSignal(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingQueue<String> logQueue, List<Thread> threadsToInterrupt) {
         //immediately stop network packet processing
         System.out.println("Immediately stopping network packet processing.");
 
         //write/flush output file if necessary
 
         try {
+            for (Thread thread : threadsToInterrupt) {
+                thread.interrupt();
+            }
             List<String> remainingLogs = new ArrayList<>();
             logQueue.drainTo(remainingLogs);
             for (String log : remainingLogs) {
@@ -45,11 +48,11 @@ public class Main {
         }
     }
 
-    private static void initSignalHandlers(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingQueue<String> logQueue) {
+    private static void initSignalHandlers(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingQueue<String> logQueue, List<Thread> threadsToInterrupt) {
         Runtime.getRuntime().addShutdownHook(new Thread() {
             @Override
             public void run() {
-                handleSignal(socket, outputWriter, logQueue);
+                handleSignal(socket, outputWriter, logQueue, threadsToInterrupt);
             }
         });
     }
@@ -58,30 +61,41 @@ public class Main {
       
         Parser parser = new Parser(args);
         parser.parse();
+        
+        FileWriter writer;
 
         String srcIp = parser.hosts().get(parser.myId() - 1).getIp();
         int srcPort = parser.hosts().get(parser.myId() - 1).getPort();
 
         Order order = parser.order();
 
-        try {  
+        try {
+
+            writer = new FileWriter(parser.output());
+            
             DatagramSocket socket = new DatagramSocket(srcPort);
 
-            LinkedBlockingQueue<String> logQueue = new LinkedBlockingQueue<>(200);
+            LinkedBlockingQueue<String> logQueue = new LinkedBlockingQueue<>(Constants.QUEUE_CAPACITY);
 
-            FileWriter writer = new FileWriter(parser.output());
         
-            initSignalHandlers(socket, writer, logQueue);
+
+            LoggingThread loggingThread = new LoggingThread(logQueue, writer);
+            loggingThread.start();
+
 
 
             if (order.nodeType == NodeType.SENDER) {
 
-                LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>(100);
+                LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>(Constants.QUEUE_CAPACITY);
                 HashMap<String, Boolean> ackedPackets = new HashMap<>();
                     
                 ReceiverThread receiverThread = new ReceiverThread(socket, packetQueue);
                 receiverThread.start();
                 
+
+                initSignalHandlers(socket, writer, logQueue, List.of(loggingThread, receiverThread));
+                
+
                 int batchSize = 8;
                 int fullBatches;
                 int remainingMessages;
@@ -99,18 +113,7 @@ public class Main {
 
                 for (int i = 0; i < order.maxMessages; i++) {
                     String logEntry = "b " + String.valueOf(i + 1);
-                    if (!logQueue.offer(logEntry)) {
-                    
-                        List<String> logs = new ArrayList<>();
-                        logQueue.drainTo(logs);
-                        for (String log : logs) {
-                            writer.write(log + "\n");
-                        }
-                        if (!logQueue.offer(logEntry)) {
-                            System.err.println("Failed to log delivery: " + logEntry);
-                        }
-                    
-                    }
+                    logQueue.put(logEntry);
                 }
 
 
@@ -202,6 +205,8 @@ public class Main {
                 ReceiverThread receiverThread = new ReceiverThread(socket, packetQueue);
                 receiverThread.start();
 
+                initSignalHandlers(socket, writer, logQueue, List.of(loggingThread, receiverThread));
+
                 while (true) {
                     DatagramPacket udpPacket = packetQueue.take();
                     Packet packet = Packet.fromString(
@@ -250,20 +255,9 @@ public class Main {
                             }
                         }
 
-                        System.err.println("Delivered message " + message.payload + " from process " + (processIndex + 1));
-
                         deliveredMessages.add(packet.srcIp + ":" + packet.srcPort + ":" + message.payload);
                         String logEntry = "d " + String.valueOf(processIndex + 1) + " " + message.payload;
-                        if (!logQueue.offer(logEntry)) {
-                            List<String> logs = new ArrayList<>();
-                            logQueue.drainTo(logs);
-                            for (String log : logs) {
-                                writer.write(log + "\n");
-                            }
-                            if (!logQueue.offer(logEntry)) {
-                                System.err.println("Failed to log delivery: " + logEntry);
-                            }
-                        }
+                        logQueue.put(logEntry);
                     }   
                 }
             }
