@@ -16,10 +16,7 @@ public class Main {
 
 
     private static void handleSignal(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingQueue<String> logQueue, List<Thread> threadsToInterrupt) {
-        //immediately stop network packet processing
         System.out.println("Immediately stopping network packet processing.");
-
-        //write/flush output file if necessary
 
         try {
             for (Thread thread : threadsToInterrupt) {
@@ -72,205 +69,65 @@ public class Main {
             writer = new FileWriter(parser.output());
             
             DatagramSocket socket = new DatagramSocket(srcPort);
+            //socket.setReceiveBufferSize(10 * 1024 * 1024); // 10MB buffer
+            //socket.setSendBufferSize(10 * 1024 * 1024); // 10MB buffer
 
             LinkedBlockingQueue<String> logQueue = new LinkedBlockingQueue<>(Constants.QUEUE_CAPACITY);
-
-        
 
             LoggingThread loggingThread = new LoggingThread(logQueue, writer);
             loggingThread.start();
 
+            LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>();
+            ReceiverThread receiverThread = new ReceiverThread(socket, packetQueue);
+            receiverThread.start();
 
-
-            if (order.nodeType == NodeType.SENDER) {
-
-                LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>(Constants.QUEUE_CAPACITY);
-                HashMap<String, Boolean> ackedPackets = new HashMap<>();
-                    
-                ReceiverThread receiverThread = new ReceiverThread(socket, packetQueue);
-                receiverThread.start();
-                
-
-                initSignalHandlers(socket, writer, logQueue, List.of(loggingThread, receiverThread));
-                
-
-                int batchSize = 8;
-                int fullBatches;
-                int remainingMessages;
-
-                if (order.maxMessages > batchSize) {
-
-                    fullBatches = order.maxMessages / batchSize;
-                    remainingMessages = order.maxMessages % batchSize;
-                
-                } else {
-                    fullBatches = 0;
-                    remainingMessages = order.maxMessages;
-                }
+            PerfectFailureDetector failureDetector = new PerfectFailureDetector(parser.hosts(), parser.myId(), socket);
             
+            UniformReliableBroadcast urb = new UniformReliableBroadcast(parser.hosts(), parser.myId(), socket);
+            failureDetector.addListener(urb::handleCrash);
+            failureDetector.addRestoreListener(urb::handleRestore);
+            failureDetector.start();
 
-                for (int i = 0; i < order.maxMessages; i++) {
-                    String logEntry = "b " + String.valueOf(i + 1);
-                    logQueue.put(logEntry);
-                }
+            FifoBroadcast fifo = new FifoBroadcast(urb, parser.hosts().size(), logQueue);
+            urb.setDeliverCallback(fifo::deliver);
+            urb.start();
 
+            initSignalHandlers(socket, writer, logQueue, List.of(loggingThread, receiverThread));
 
-                List<List<Message>> batches = new ArrayList<>();
-
-                for (int i = 0; i < fullBatches; i++) {
-                    List<Message> messages = new ArrayList<>();
-                    for (int j = 0; j < batchSize; j++) {
-                        String messageContent = String.valueOf(i * batchSize + j + 1);
-                        messages.add(new Message(messageContent));
-                    }
-                    batches.add(messages);
-                }
-                if (remainingMessages > 0) {
-                    List<Message> messages = new ArrayList<>();
-                    for (int j = 0; j < remainingMessages; j++) {
-                        String messageContent = String.valueOf(fullBatches * batchSize + j + 1);
-                        messages.add(new Message(messageContent));
-                    }
-                    batches.add(messages);
-                }
-
-
+            new Thread(() -> {
                 while (true) {
-
-                    for (Host host : parser.hosts()) {
-
-                        if (host.getId() != order.destId) {
-                            continue;
-                        }
-
-                        int packetIdCounter = 0;
-                
-                        for (List<Message> batch : batches) {
+                    try {
+                        DatagramPacket packet = packetQueue.take();
+                        String content = new String(packet.getData(), 0, packet.getLength());
                         
-                            packetIdCounter += 1;
-
-                            if (ackedPackets.containsKey(String.valueOf(host.getIp()) + ":" + String.valueOf(host.getPort()) + ":" + String.valueOf(packetIdCounter)) &&
-                                ackedPackets.get(String.valueOf(host.getIp()) + ":" + String.valueOf(host.getPort()) + ":" + String.valueOf(packetIdCounter)) == true) {
-                                continue;
-                            } 
-
-                            Packet packet = new Packet(
-                                srcIp,
-                                srcPort,
-                                host.getIp(),
-                                host.getPort(),
-                                packetIdCounter,
-                                batch
-                            );
-
-
-                            ackedPackets.put(String.valueOf(packet.destIp) + ":" + String.valueOf(packet.destPort) + ":" + String.valueOf(packetIdCounter), false);
-
-                            byte[] data = packet.toString().getBytes();
-
-                            DatagramPacket datagramPacket = new DatagramPacket(
-                                data,
-                                data.length,
-                                InetAddress.getByName(host.getIp()),
-                                host.getPort()
-                            );
-
-                            socket.send(datagramPacket);
+                        if (content.startsWith("Heartbeat ")) {
+                            String[] parts = content.split(" ");
+                            int senderId = Integer.parseInt(parts[1]);
+                            failureDetector.registerHeartbeat(senderId);
+                        } else if (content.startsWith("URB ")) {
+                            String[] parts = content.split(" ", 3);
+                            int senderId = Integer.parseInt(parts[1]);
+                            String msgId = parts[2];
+                            urb.receive(msgId, senderId);
                         }
-
-                    }
-                    while (!packetQueue.isEmpty()) {
-                        DatagramPacket receivedPacket = packetQueue.take();
-                        String receivedData = new String(
-                            receivedPacket.getData(),
-                            0,
-                            receivedPacket.getLength()
-                        );
-                        Packet receivedAck = Packet.fromString(receivedData);
-                        List<Message> messages = receivedAck.messages;
-                        if (messages.size() > 0 && messages.get(0).payload.startsWith("ACK")) {
-                            ackedPackets.replace(String.valueOf(receivedAck.srcIp) + ":" + String.valueOf(receivedAck.srcPort) + ":" + String.valueOf(receivedAck.packetId), true);
-                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 }
+            }).start();
+
+            for (int i = 1; i <= order.maxMessages; i++) {
+                String msg = String.valueOf(i);
+                fifo.broadcast(msg);
+                logQueue.put("b " + msg);
             }
-        
 
-            else if (order.nodeType == NodeType.RECEIVER) {
-
-                LinkedBlockingQueue<DatagramPacket> packetQueue = new LinkedBlockingQueue<>(100);
-                Set<String> deliveredMessages = new HashSet<>();
-                ReceiverThread receiverThread = new ReceiverThread(socket, packetQueue);
-                receiverThread.start();
-
-                initSignalHandlers(socket, writer, logQueue, List.of(loggingThread, receiverThread));
-
-                while (true) {
-                    DatagramPacket udpPacket = packetQueue.take();
-                    Packet packet = Packet.fromString(
-                        new String(udpPacket.getData(), 0, udpPacket.getLength())
-                    );
-
-
-                    List<Message> messages = new ArrayList<>();
-                    for (Message msg : packet.messages) {
-                        messages.add(new Message("ACK " + msg.payload));
-                    }
-
-                    Packet packetToSend = new Packet(
-                        srcIp,
-                        srcPort,
-                        packet.srcIp,
-                        packet.srcPort,
-                        packet.packetId,
-                        messages
-                    );
-        
-
-                    byte[] data = packetToSend.toString().getBytes();
-
-                    DatagramPacket ackPacket = new DatagramPacket(
-                        data,
-                        data.length,
-                        InetAddress.getByName(packet.srcIp),
-                        packet.srcPort
-                    );
-                    socket.send(ackPacket);
-
-
-                
-                    for (Message message : packet.messages) {
-
-                        if (deliveredMessages.contains(packet.srcIp + ":" + packet.srcPort + ":" + message.payload)) {
-                            continue;
-                        }
-
-                        int processIndex = -1;
-                        for (int i = 0; i < parser.hosts().size(); i++) {
-                            if (parser.hosts().get(i).getIp().equals(packet.srcIp) && parser.hosts().get(i).getPort() == packet.srcPort) {
-                                processIndex = i;
-                                break;
-                            }
-                        }
-
-                        deliveredMessages.add(packet.srcIp + ":" + packet.srcPort + ":" + message.payload);
-                        String logEntry = "d " + String.valueOf(processIndex + 1) + " " + message.payload;
-                        logQueue.put(logEntry);
-                    }   
-                }
+            while (true) {
+                Thread.sleep(60 * 60 * 1000);
             }
         }
-
         catch (Exception e) {
-            // add full traceback print
             e.printStackTrace();
-        }
-
-            // After a process finishes broadcasting,
-            // it waits forever for the delivery of messages.
-        while (true) {
-            // Sleep for 1 hour
-            Thread.sleep(60 * 60 * 1000);
         }
     }
 }

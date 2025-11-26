@@ -52,7 +52,6 @@ public class HostsParser {
             return false;
         }
 
-        // sort by id
         Collections.sort(hosts, new HostsComparator());
         return true;
     }

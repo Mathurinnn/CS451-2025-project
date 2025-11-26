@@ -43,16 +43,11 @@ public class ConfigParser {
             String line;
             while ((line = br.readLine()) != null) {
                 String[] args = line.split("\\s");
-                if (args.length != 2) {
+                if (args.length != 1) {
                     System.err.println("Invalid config format");
                     return false;
                 }
-                if (!args[1].equals(String.valueOf(myId))) {
-                    this.order = new Order(NodeType.SENDER, Integer.parseInt(args[0]), Integer.parseInt(args[1]));
-                }
-                else {
-                    this.order = new Order(NodeType.RECEIVER, 0);
-                }
+                this.order = new Order(NodeType.SENDER, Integer.parseInt(args[0]));
             }
             br.close();
         }
