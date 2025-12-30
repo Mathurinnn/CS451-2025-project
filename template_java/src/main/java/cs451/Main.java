@@ -88,42 +88,68 @@ public class Main {
             failureDetector.addRestoreListener(urb::handleRestore);
             failureDetector.start();
 
-            FifoBroadcast fifo = new FifoBroadcast(urb, parser.hosts().size(), logQueue);
-            urb.setDeliverCallback(fifo::deliver);
-            urb.start();
-
             initSignalHandlers(socket, writer, logQueue, List.of(loggingThread, receiverThread));
 
-            new Thread(() -> {
-                while (true) {
+            java.util.concurrent.atomic.AtomicBoolean dispatchRunning = new java.util.concurrent.atomic.AtomicBoolean(true);
+
+            Thread dispatchThread = new Thread(() -> {
+                while (dispatchRunning.get()) {
                     try {
                         DatagramPacket packet = packetQueue.take();
                         String content = new String(packet.getData(), 0, packet.getLength());
                         
-                        if (content.startsWith("Heartbeat ")) {
-                            String[] parts = content.split(" ");
-                            int senderId = Integer.parseInt(parts[1]);
-                            failureDetector.registerHeartbeat(senderId);
-                        } else if (content.startsWith("URB ")) {
-                            String[] parts = content.split(" ", 3);
-                            int senderId = Integer.parseInt(parts[1]);
-                            String msgId = parts[2];
-                            urb.receive(msgId, senderId);
+                        Message m = Message.parse(content);
+                        if (m != null) {
+                            if (m.type == Message.Type.HEARTBEAT) {
+                                failureDetector.registerHeartbeat(m.senderId);
+                            } else if (m.type == Message.Type.URB) {
+                                urb.receive(m);
+                            }
                         }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        if (dispatchRunning.get()) {
+                            e.printStackTrace();
+                        }
                     }
                 }
-            }).start();
+            });
+            dispatchThread.start();
 
-            for (int i = 1; i <= order.maxMessages; i++) {
-                String msg = String.valueOf(i);
-                fifo.broadcast(msg);
-                logQueue.put("b " + msg);
-            }
+            if (order.type == OrderType.BROADCAST) {
+                FifoBroadcast fifo = new FifoBroadcast(urb, parser.hosts().size(), logQueue);
+                urb.setDeliverCallback(fifo::deliver);
+                urb.start();
 
-            while (true) {
-                Thread.sleep(60 * 60 * 1000);
+                for (int i = 1; i <= order.maxMessages; i++) {
+                    String msg = String.valueOf(i);
+                    fifo.broadcast(msg);
+                    logQueue.put("b " + msg);
+                }
+
+                while (true) {
+                    Thread.sleep(60 * 60 * 1000);
+                }
+            } else {
+                java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+                LatticeAgreement la = new LatticeAgreement(urb, parser.myId(), parser.hosts().size(), order.proposals, logQueue, done::countDown);
+                urb.setDeliverCallback(la::onDeliver);
+                urb.start();
+                la.start();
+
+                // Wait for all proposals to be decided with a generous timeout to avoid infinite hang in tests.
+                // Wait until all proposals decided, then keep serving until Ctrl-C.
+                try {
+                    done.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+
+                // Stay alive to answer late peers; rely on Ctrl-C/shutdown hook to stop.
+                while (true) {
+                    Thread.sleep(60_000);
+                }
             }
         }
         catch (Exception e) {

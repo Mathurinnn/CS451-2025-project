@@ -67,7 +67,8 @@ Push-Location $targetClasses
 try {
     $destJar = Join-Path $ScriptDir "bin\da_proc.jar"
     Write-Host "Packaging classes into $destJar (Main class: cs451.Main)..."
-    & jar cfe $destJar cs451.Main cs451\*.class
+    # Use -C to avoid wildcard expansion issues on some shells.
+    & jar cfe $destJar cs451.Main -C "$targetClasses" cs451
     if ($LASTEXITCODE -ne 0) { Exit-WithError "jar command failed with exit code $LASTEXITCODE" $LASTEXITCODE }
     Write-Host "Created $destJar"
 } finally {

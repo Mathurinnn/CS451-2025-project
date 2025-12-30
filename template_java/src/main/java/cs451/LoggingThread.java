@@ -10,6 +10,7 @@ public class LoggingThread extends Thread {
     private final LinkedBlockingQueue<String> logQueue;
     private final FileWriter writer;
     private final List<String> buffer = new ArrayList<>(Constants.QUEUE_CAPACITY);
+    private volatile boolean running = true;
 
     public LoggingThread(LinkedBlockingQueue<String> logQueue, FileWriter writer) {
         this.logQueue = logQueue;
@@ -19,14 +20,17 @@ public class LoggingThread extends Thread {
     @Override
     public void run() {
         try {
-            while (!Thread.currentThread().isInterrupted()) {
-                if (logQueue.remainingCapacity() == 0) 
-                {
-                    String logEntry = logQueue.take();
+            while (running && !Thread.currentThread().isInterrupted()) {
+                // Periodically flush whatever is available to keep outputs up to date.
+                String logEntry = logQueue.poll();
+                if (logEntry != null) {
                     buffer.add(logEntry);
                     logQueue.drainTo(buffer);
                     processLogs();
                     buffer.clear();
+                } else {
+                    // Avoid busy spinning.
+                    Thread.sleep(10);
                 }
             }
         } catch (InterruptedException e) {
@@ -34,6 +38,18 @@ public class LoggingThread extends Thread {
         } catch (Exception e) {
             System.err.println("Error in LoggingThread: " + e.getMessage());
         }
+        // Final flush on exit
+        try {
+            buffer.addAll(logQueue);
+            processLogs();
+            buffer.clear();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public void shutdown() {
+        running = false;
+        interrupt();
     }
 
     private void processLogs() throws IOException {

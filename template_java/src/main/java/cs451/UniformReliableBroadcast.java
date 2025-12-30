@@ -7,21 +7,25 @@ import java.net.InetAddress;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.BiConsumer;
 
 public class UniformReliableBroadcast {
 
+    public interface DeliverCallback {
+        void deliver(int senderId, String content);
+    }
+
     private final List<Host> hosts;
     private final int myId;
     private final DatagramSocket socket;
-    private BiConsumer<Integer, String> deliverCallback;
+    private DeliverCallback deliverCallback;
     private volatile boolean running = true;
     
     private final Set<String> delivered = ConcurrentHashMap.newKeySet();
     private final Set<String> pending = ConcurrentHashMap.newKeySet();
     private final Set<String> active = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, Set<Integer>> acks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> payloads = new ConcurrentHashMap<>();
     private final Set<Integer> correct = ConcurrentHashMap.newKeySet();
 
     public UniformReliableBroadcast(List<Host> hosts, int myId, DatagramSocket socket) {
@@ -44,7 +48,7 @@ public class UniformReliableBroadcast {
         correct.add(hostId);
     }
 
-    public void setDeliverCallback(BiConsumer<Integer, String> deliverCallback) {
+    public void setDeliverCallback(DeliverCallback deliverCallback) {
         this.deliverCallback = deliverCallback;
     }
 
@@ -54,22 +58,35 @@ public class UniformReliableBroadcast {
 
     public void stop() {
         running = false;
+        active.clear();
     }
 
     private void retransmitLoop() {
         while (running) {
             try {
-                for (String msgId : active) {
-                    Set<Integer> msgAcks = acks.get(msgId);
+                for (String uniqueId : active) {
+                    Set<Integer> msgAcks = acks.get(uniqueId);
                     boolean allAcked = true;
+                    
+                    String payload = payloads.get(uniqueId);
+                    if (payload == null) {
+                        active.remove(uniqueId);
+                        continue;
+                    }
+                    
+                    String[] parts = uniqueId.split(":");
+                    int originalSenderId = Integer.parseInt(parts[0]);
+                    Message m = Message.makeUrb(myId, originalSenderId, payload);
+                    String networkString = m.toNetworkString();
+
                     for (Host host : hosts) {
                         if (msgAcks == null || !msgAcks.contains(host.getId())) {
-                            send(host, "URB " + myId + " " + msgId);
+                            send(host, networkString);
                             allAcked = false;
                         }
                     }
                     if (allAcked) {
-                        active.remove(msgId);
+                        active.remove(uniqueId);
                     }
                 }
                 Thread.sleep(100); // Retransmit every 100ms
@@ -79,30 +96,40 @@ public class UniformReliableBroadcast {
         }
     }
 
-    public void broadcast(String messageContent) {
-        String msgId = myId + ":" + messageContent; // Unique ID
-        if (!pending.contains(msgId)) {
-            pending.add(msgId);
-            active.add(msgId);
-            bebBroadcast(msgId);
+    public void broadcast(String content) {
+        if (!running) return;
+        Message m = Message.makeUrb(myId, myId, content);
+        String uniqueId = m.getUniqueId();
+        
+        if (!pending.contains(uniqueId) && !delivered.contains(uniqueId)) {
+            pending.add(uniqueId);
+            active.add(uniqueId);
+            payloads.put(uniqueId, content);
+            bebBroadcast(m);
         }
     }
 
-    public void receive(String msgId, int senderId) {
-        acks.computeIfAbsent(msgId, k -> ConcurrentHashMap.newKeySet()).add(senderId);
+    public void receive(Message m) {
+        if (!running) return;
+        String uniqueId = m.getUniqueId();
+        acks.computeIfAbsent(uniqueId, k -> ConcurrentHashMap.newKeySet()).add(m.senderId);
 
-        if (!pending.contains(msgId)) {
-            pending.add(msgId);
-            active.add(msgId);
-            bebBroadcast(msgId);
+        if (!pending.contains(uniqueId) && !delivered.contains(uniqueId)) {
+            pending.add(uniqueId);
+            active.add(uniqueId);
+            payloads.put(uniqueId, m.payload);
+            
+            Message relayMsg = Message.makeUrb(myId, m.originalSenderId, m.payload);
+            bebBroadcast(relayMsg);
         }
 
-        checkDeliver(msgId);
+        checkDeliver(uniqueId);
     }
 
-    private void bebBroadcast(String msgId) {
+    private void bebBroadcast(Message m) {
+        String networkString = m.toNetworkString();
         for (Host host : hosts) {
-             send(host, "URB " + myId + " " + msgId);
+             send(host, networkString);
         }
     }
 
@@ -121,20 +148,25 @@ public class UniformReliableBroadcast {
         }
     }
 
-    private void checkDeliver(String msgId) {
-        if (delivered.contains(msgId)) return;
+    private void checkDeliver(String uniqueId) {
+        if (delivered.contains(uniqueId)) return;
 
-        Set<Integer> msgAcks = acks.get(msgId);
+        Set<Integer> msgAcks = acks.get(uniqueId);
         if (msgAcks == null) return;
 
         if (msgAcks.containsAll(correct)) {
-            if (delivered.add(msgId)) {
-                String[] parts = msgId.split(":", 2);
+            if (delivered.add(uniqueId)) {
+                acks.remove(uniqueId);
+                pending.remove(uniqueId);
+                String content = payloads.remove(uniqueId);
+                
+                if (content == null) return;
+
+                String[] parts = uniqueId.split(":");
                 int originalSender = Integer.parseInt(parts[0]);
-                String content = parts[1];
                 
                 if (deliverCallback != null) {
-                    deliverCallback.accept(originalSender, content);
+                    deliverCallback.deliver(originalSender, content);
                 }
             }
         }

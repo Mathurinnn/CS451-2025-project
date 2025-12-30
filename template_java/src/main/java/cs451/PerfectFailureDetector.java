@@ -102,10 +102,11 @@ public class PerfectFailureDetector {
     private void sendHeartbeats() {
         while (running) {
             try {
+                Message m = Message.makeHeartbeat(myId);
+                String msg = m.toNetworkString();
+                byte[] data = msg.getBytes();
                 for (Host host : hosts) {
                     if (host.getId() != myId) {
-                        String msg = "Heartbeat " + myId;
-                        byte[] data = msg.getBytes();
                         DatagramPacket packet = new DatagramPacket(
                             data,
                             data.length,

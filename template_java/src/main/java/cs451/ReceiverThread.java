@@ -16,14 +16,16 @@ public class ReceiverThread extends Thread {
 
     @Override
     public void run() {
-        while (true) {
+        while (!Thread.currentThread().isInterrupted() && !socket.isClosed()) {
             try {
                 byte[] buffer = new byte[65535];
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 socket.receive(packet);
                 packetQueue.put(packet);
             } catch (Exception e) {
-                // System.err.println("Error receiving packet: " + e.getMessage());
+                if (socket.isClosed() || Thread.currentThread().isInterrupted()) {
+                    break;
+                }
             }
         }
     }

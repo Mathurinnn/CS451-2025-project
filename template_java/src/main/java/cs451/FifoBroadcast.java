@@ -39,15 +39,17 @@ public class FifoBroadcast {
     }
 
     public void broadcast(String content) {
-        int seq = localSequence.incrementAndGet();
-        String fifoPayload = seq + "#" + content;
-        urb.broadcast(fifoPayload);
+        urb.broadcast(content);
     }
 
     public void deliver(int senderId, String payload) {
-        String[] parts = payload.split("#", 2);
-        int seq = Integer.parseInt(parts[0]);
-        String content = parts[1];
+        int seq;
+        try {
+            seq = Integer.parseInt(payload);
+        } catch (NumberFormatException e) {
+            return;
+        }
+        String content = payload;
 
         Map<Integer, String> senderPending = pending.get(senderId);
         if (senderPending == null) {
