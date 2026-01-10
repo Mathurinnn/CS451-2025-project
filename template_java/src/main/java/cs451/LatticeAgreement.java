@@ -9,10 +9,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 
-/**
- * Lattice Agreement (multi-shot) following the provided proposer/acceptor pseudocode.
- * One slot is executed per proposal in the config; slots are run sequentially.
- */
 public class LatticeAgreement {
     private enum LaMessageType {
         PROP,
@@ -30,8 +26,8 @@ public class LatticeAgreement {
     private final Runnable onComplete;
 
     private final Map<Integer, SlotState> slots = new ConcurrentHashMap<>();
-    private int nextProposalSlot = 0;
-    private int decidedCount = 0;
+    private final java.util.concurrent.atomic.AtomicInteger decidedCount = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicBoolean completionSignaled = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     public LatticeAgreement(UniformReliableBroadcast urb, int myId, int hostCount, List<List<Integer>> proposals, LinkedBlockingQueue<String> logQueue, Runnable onComplete) {
         this.urb = urb;
@@ -44,9 +40,18 @@ public class LatticeAgreement {
     }
 
     public void start() {
-        if (proposals != null && !proposals.isEmpty()) {
-            proposeNextSlot();
+        if (proposals == null || proposals.isEmpty()) {
+            return;
         }
+
+        try {
+            Thread.sleep(2000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        SlotState state = slots.computeIfAbsent(0, s -> new SlotState(s));
+        state.startProposal(new HashSet<>(proposals.get(0)));
     }
 
     public void onDeliver(int senderId, String payload) {
@@ -55,11 +60,21 @@ public class LatticeAgreement {
             return;
         }
 
+        if (proposals == null || proposals.isEmpty()) {
+            return;
+        }
+
         if (msg.slot < 0 || msg.slot >= proposals.size()) {
             return;
         }
 
-        SlotState slotState = slots.computeIfAbsent(msg.slot, s -> new SlotState(s));
+        SlotState slotState = slots.get(msg.slot);
+        if (slotState == null) {
+            if (msg.type != LaMessageType.PROP) {
+                return;
+            }
+            slotState = slots.computeIfAbsent(msg.slot, s -> new SlotState(s));
+        }
 
         switch (msg.type) {
             case PROP:
@@ -76,25 +91,7 @@ public class LatticeAgreement {
         }
     }
 
-    private void proposeNextSlot() {
-        if (nextProposalSlot >= proposals.size()) {
-            if (onComplete != null) {
-                onComplete.run();
-            }
-            return;
-        }
-        SlotState state = slots.computeIfAbsent(nextProposalSlot, s -> new SlotState(s));
-        state.startProposal(new HashSet<>(proposals.get(nextProposalSlot)));
-    }
-
     private void onSlotDecided(int slot, Set<Integer> decidedValues) {
-        if (slot != nextProposalSlot) {
-            // Ignore out-of-order decides; we run sequentially.
-            return;
-        }
-
-        decidedCount++;
-
         List<Integer> decided = new ArrayList<>(decidedValues);
         Collections.sort(decided);
         StringBuilder sb = new StringBuilder();
@@ -108,13 +105,14 @@ public class LatticeAgreement {
             Thread.currentThread().interrupt();
         }
 
-        nextProposalSlot++;
-        if (decidedCount >= proposals.size()) {
-            if (onComplete != null) {
+        int finished = decidedCount.incrementAndGet();
+        if (proposals != null && finished < proposals.size()) {
+            SlotState next = slots.computeIfAbsent(finished, s -> new SlotState(s));
+            next.startProposal(new HashSet<>(proposals.get(finished)));
+        } else if (proposals != null && finished >= proposals.size()) {
+            if (onComplete != null && completionSignaled.compareAndSet(false, true)) {
                 onComplete.run();
             }
-        } else {
-            proposeNextSlot();
         }
     }
 
@@ -159,7 +157,7 @@ public class LatticeAgreement {
             } else if (type == LaMessageType.NACK) {
                 startIdx = 5;
             } else {
-                startIdx = tokens.length; // ACK has no values
+                startIdx = tokens.length;
             }
 
             for (int i = startIdx; i < tokens.length; i++) {
@@ -203,6 +201,7 @@ public class LatticeAgreement {
     private class SlotState {
         private final int slot;
         private final Set<Integer> acceptedValue = new HashSet<>();
+        private final int quorum = hostCount - f;
 
         private boolean active = false;
         private boolean decided = false;
@@ -210,6 +209,7 @@ public class LatticeAgreement {
         private Set<Integer> proposedValue = new HashSet<>();
         private int ackCount = 0;
         private int nackCount = 0;
+        private final Set<Integer> responders = new HashSet<>();
 
         SlotState(int slot) {
             this.slot = slot;
@@ -226,10 +226,8 @@ public class LatticeAgreement {
             active = true;
             proposalNumber++;
             proposedValue = new HashSet<>(proposal);
-            ackCount = 0;
-            nackCount = 0;
+            resetRoundCounters();
 
-            // Broadcast proposal
             broadcastProposal();
         }
 
@@ -254,9 +252,12 @@ public class LatticeAgreement {
             if (msg.slot != slot || msg.proposalNumber != proposalNumber) {
                 return;
             }
+            if (!responders.add(senderId)) {
+                return; 
+            }
             ackCount++;
 
-            if (ackCount >= f + 1) {
+            if (ackCount + nackCount >= quorum && nackCount == 0) {
                 decide();
             }
         }
@@ -271,16 +272,26 @@ public class LatticeAgreement {
             if (msg.slot != slot || msg.proposalNumber != proposalNumber) {
                 return;
             }
+            if (!responders.add(senderId)) {
+                return;
+            }
 
             proposedValue.addAll(msg.values);
 
             nackCount++;
-            if (nackCount > 0 && ackCount + nackCount >= f + 1) {
+            if (ackCount + nackCount >= quorum) {
                 proposalNumber++;
-                ackCount = 0;
-                nackCount = 0;
+                resetRoundCounters();
                 broadcastProposal();
             }
+        }
+
+        private void resetRoundCounters() {
+            ackCount = 0;
+            nackCount = 0;
+            responders.clear();
+            responders.add(myId);
+            ackCount++;
         }
 
         private void broadcastProposal() {

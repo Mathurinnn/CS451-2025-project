@@ -36,7 +36,6 @@ public class Message {
                 int senderId = Integer.parseInt(parts[1]);
                 return makeHeartbeat(senderId);
             } else if ("URB".equals(typeStr)) {
-                // Format: URB senderId originalSenderId payload
                 String[] args = parts[1].split(" ", 3);
                 int senderId = Integer.parseInt(args[0]);
                 int originalSenderId = Integer.parseInt(args[1]);
@@ -44,7 +43,6 @@ public class Message {
                 return makeUrb(senderId, originalSenderId, payload);
             }
         } catch (Exception e) {
-            // Malformed message
             return null;
         }
         return null;

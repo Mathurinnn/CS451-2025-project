@@ -20,7 +20,6 @@ class Order {
     public boolean isCompleted = false;
     public int destId;
 
-    // Lattice-agreement specific fields
     public int proposalsCount;
     public int maxProposalSize;
     public int distinctValues;
@@ -60,10 +59,8 @@ public class ConfigParser {
 
             String[] firstLine = line.trim().split("\\s+");
             if (firstLine.length == 1) {
-                // Milestone 1 & 2 (broadcast)
                 this.order = new Order(OrderType.BROADCAST, Integer.parseInt(firstLine[0]));
             } else if (firstLine.length == 3) {
-                // Milestone 3 (lattice agreement)
                 int proposalsCount = Integer.parseInt(firstLine[0]);
                 int maxProposalSize = Integer.parseInt(firstLine[1]);
                 int distinctValues = Integer.parseInt(firstLine[2]);

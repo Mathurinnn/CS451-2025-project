@@ -21,7 +21,6 @@ public class LoggingThread extends Thread {
     public void run() {
         try {
             while (running && !Thread.currentThread().isInterrupted()) {
-                // Periodically flush whatever is available to keep outputs up to date.
                 String logEntry = logQueue.poll();
                 if (logEntry != null) {
                     buffer.add(logEntry);
@@ -29,7 +28,6 @@ public class LoggingThread extends Thread {
                     processLogs();
                     buffer.clear();
                 } else {
-                    // Avoid busy spinning.
                     Thread.sleep(10);
                 }
             }
@@ -38,7 +36,6 @@ public class LoggingThread extends Thread {
         } catch (Exception e) {
             System.err.println("Error in LoggingThread: " + e.getMessage());
         }
-        // Final flush on exit
         try {
             buffer.addAll(logQueue);
             processLogs();

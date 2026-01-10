@@ -89,7 +89,7 @@ public class UniformReliableBroadcast {
                         active.remove(uniqueId);
                     }
                 }
-                Thread.sleep(100); // Retransmit every 100ms
+                Thread.sleep(100); 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -105,7 +105,10 @@ public class UniformReliableBroadcast {
             pending.add(uniqueId);
             active.add(uniqueId);
             payloads.put(uniqueId, content);
+            acks.computeIfAbsent(uniqueId, k -> ConcurrentHashMap.newKeySet()).add(myId);
             bebBroadcast(m);
+            checkDeliver(uniqueId);
+            deliverLocalIfNeeded(uniqueId, content, myId);
         }
     }
 
@@ -165,10 +168,18 @@ public class UniformReliableBroadcast {
                 String[] parts = uniqueId.split(":");
                 int originalSender = Integer.parseInt(parts[0]);
                 
-                if (deliverCallback != null) {
-                    deliverCallback.deliver(originalSender, content);
-                }
+                deliverLocalIfNeeded(uniqueId, content, originalSender);
             }
         }
+    }
+
+    private void deliverLocalIfNeeded(String uniqueId, String content, int originalSender) {
+        if (deliverCallback == null) {
+            return;
+        }
+        if (!delivered.contains(uniqueId)) {
+            delivered.add(uniqueId);
+        }
+        deliverCallback.deliver(originalSender, content);
     }
 }

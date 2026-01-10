@@ -14,8 +14,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 public class Main {
 
+    private static final java.util.concurrent.atomic.AtomicBoolean shutdownInitiated = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private static void handleSignal(DatagramSocket socket, FileWriter outputWriter, LinkedBlockingQueue<String> logQueue, List<Thread> threadsToInterrupt) {
+        if (!shutdownInitiated.compareAndSet(false, true)) {
+            return;
+        }
+
         System.out.println("Immediately stopping network packet processing.");
 
         try {
@@ -138,15 +143,12 @@ public class Main {
                 urb.start();
                 la.start();
 
-                // Wait for all proposals to be decided with a generous timeout to avoid infinite hang in tests.
-                // Wait until all proposals decided, then keep serving until Ctrl-C.
                 try {
                     done.await();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
 
-                // Stay alive to answer late peers; rely on Ctrl-C/shutdown hook to stop.
                 while (true) {
                     Thread.sleep(60_000);
                 }
