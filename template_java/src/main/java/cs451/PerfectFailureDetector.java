@@ -118,7 +118,7 @@ public class PerfectFailureDetector {
                 }
                 Thread.sleep(DELTA / 2);
             } catch (IOException | InterruptedException e) {
-                e.printStackTrace();
+                // Ignore
             }
         }
     }
